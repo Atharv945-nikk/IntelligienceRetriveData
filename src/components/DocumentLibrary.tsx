@@ -48,6 +48,10 @@ const DocumentLibrary = () => {
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  type SortOption = "newest" | "oldest" | "name" | "size";
+  const [sortBy, setSortBy] = useState<SortOption>("newest");
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
+
   // ── Fetch documents ──────────────────────────────────────────────────────
   const fetchDocuments = useCallback(async () => {
     setIsLoading(true);
@@ -56,8 +60,13 @@ const DocumentLibrary = () => {
       const res = await fetch("/api/documents");
       if (!res.ok) throw new Error("Failed to load documents.");
       const { documents: docs } = await res.json();
+      const safeDocs = Array.isArray(docs) ? docs : [];
       setDocuments(
-        (docs as Document[]).map((d) => ({ ...d, status: "Ready" as const }))
+        safeDocs.map((d) => ({ 
+          ...d, 
+          name: d.name || d.metadata?.filename || "Untitled",
+          status: "Ready" as const 
+        }))
       );
     } catch (err) {
       setFetchError(err instanceof Error ? err.message : "Unknown error.");
@@ -136,25 +145,42 @@ const DocumentLibrary = () => {
     }
   };
 
-  const filteredDocs = documents.filter((d) =>
-    d.name.toLowerCase().includes(search.toLowerCase())
-  );
+  // ── Sorting and Filtering ───────────────────────────────────────────────
+  const filteredDocs = (documents || [])
+    .filter((d) => {
+      const name = d?.name || d?.metadata?.filename || "Untitled Document";
+      return name.toLowerCase().includes((search || "").toLowerCase());
+    })
+    .sort((a, b) => {
+      const nameA = a?.name || a?.metadata?.filename || "";
+      const nameB = b?.name || b?.metadata?.filename || "";
+      const dateA = new Date(a?.created_at || 0).getTime();
+      const dateB = new Date(b?.created_at || 0).getTime();
+      const sizeA = a?.size_bytes || 0;
+      const sizeB = b?.size_bytes || 0;
+
+      if (sortBy === "newest") return dateB - dateA;
+      if (sortBy === "oldest") return dateA - dateB;
+      if (sortBy === "name") return nameA.localeCompare(nameB);
+      if (sortBy === "size") return sizeB - sizeA;
+      return 0;
+    });
 
   const stats = [
-    { label: "Total Files", value: documents.length.toString(), icon: Grid },
+    { label: "Total Files", value: (documents || []).length.toString(), icon: Grid },
     {
       label: "Storage Used",
-      value: formatBytes(documents.reduce((a, d) => a + (d.size_bytes ?? 0), 0)),
+      value: formatBytes((documents || []).reduce((a, d) => a + (d?.size_bytes ?? 0), 0)),
       icon: Sparkles,
     },
     {
       label: "Total Chunks",
-      value: documents.reduce((a, d) => a + (d.chunk_count ?? 0), 0).toString(),
+      value: (documents || []).reduce((a, d) => a + (d?.chunk_count ?? 0), 0).toString(),
       icon: Sparkles,
     },
     {
       label: "Indexed",
-      value: `${documents.filter((d) => d.status === "Ready").length}/${documents.length}`,
+      value: `${(documents || []).filter((d) => d?.status === "Ready").length}/${(documents || []).length}`,
       icon: CheckCircle2,
     },
   ];
@@ -281,10 +307,43 @@ const DocumentLibrary = () => {
             className="w-full glass-panel rounded-2xl py-3.5 lg:py-4 pl-14 pr-6 outline-none focus:border-primary/50 text-sm lg:text-base text-on-surface transition-all shadow-xl"
           />
         </div>
-        <button className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3.5 rounded-2xl glass-panel text-on-surface-variant hover:text-white hover:border-white/20 transition-all font-bold text-sm">
-          <Filter className="w-5 h-5" />
-          <span>Filters</span>
-        </button>
+        
+        <div className="relative w-full sm:w-auto">
+          <button 
+            onClick={() => setIsFilterOpen(!isFilterOpen)}
+            className={`w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3.5 rounded-2xl glass-panel text-on-surface-variant hover:text-white transition-all font-bold text-sm ${isFilterOpen ? "border-primary/50 bg-white/5" : "border-white/10"}`}
+          >
+            <Filter className="w-5 h-5" />
+            <span>Sort: {sortBy.charAt(0).toUpperCase() + sortBy.slice(1)}</span>
+          </button>
+
+          <AnimatePresence>
+            {isFilterOpen && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setIsFilterOpen(false)} />
+                <motion.div
+                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                  className="absolute right-0 mt-2 w-48 rounded-2xl glass-panel bg-[#0b1326]/90 backdrop-blur-xl border border-white/10 shadow-2xl z-20 overflow-hidden"
+                >
+                  {(["newest", "oldest", "name", "size"] as const).map((option) => (
+                    <button
+                      key={option}
+                      onClick={() => {
+                        setSortBy(option);
+                        setIsFilterOpen(false);
+                      }}
+                      className={`w-full px-5 py-3 text-left text-sm transition-colors hover:bg-white/5 ${sortBy === option ? "text-primary font-bold" : "text-on-surface-variant"}`}
+                    >
+                      {option.charAt(0).toUpperCase() + option.slice(1)}
+                    </button>
+                  ))}
+                </motion.div>
+              </>
+            )}
+          </AnimatePresence>
+        </div>
       </div>
 
       {/* ── Loading skeleton ─────────────────────────────────────────────── */}

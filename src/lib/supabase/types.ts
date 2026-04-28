@@ -1,43 +1,25 @@
 /**
  * src/lib/supabase/types.ts
- *
- * Hand-crafted database types that match supabase/schema.sql exactly.
- * These give full IntelliSense throughout the codebase without needing
- * the Supabase CLI or code-generator.
- *
- * Update this file whenever you change the schema.
  */
 
-// ─── Table row shapes ─────────────────────────────────────────────────────────
-
 export interface DocumentRow {
-  id: string;                   // uuid
-  name: string;
-  size_bytes: number;
-  num_pages: number;
-  created_at: string;           // ISO 8601
-}
-
-export interface DocumentChunkRow {
-  id: string;                   // uuid
-  document_id: string;          // fk → documents.id
-  chunk_index: number;
+  id: number;
   content: string;
-  embedding: number[] | null;   // vector(1536) — null before indexing
+  metadata: {
+    filename: string;
+    chunk_index: number;
+    [key: string]: any;
+  };
+  embedding: number[] | null;   // vector(1536) - Standardized on OpenAI
   created_at: string;
 }
 
-// ─── RPC return types ─────────────────────────────────────────────────────────
-
-export interface MatchChunkResult {
-  id: string;
-  document_id: string;
+export interface MatchDocumentResult {
+  id: number;
   content: string;
-  similarity: number;           // 0–1  (cosine similarity)
+  metadata: any;
+  similarity: number;
 }
-
-// ─── Supabase Database generic type ──────────────────────────────────────────
-// Pass this to createClient<Database>() for end-to-end type safety.
 
 export interface Database {
   public: {
@@ -45,30 +27,21 @@ export interface Database {
       documents: {
         Row: DocumentRow;
         Insert: Omit<DocumentRow, "id" | "created_at"> & {
-          id?: string;
+          id?: number;
           created_at?: string;
         };
         Update: Partial<Omit<DocumentRow, "id">>;
       };
-      document_chunks: {
-        Row: DocumentChunkRow;
-        Insert: Omit<DocumentChunkRow, "id" | "created_at"> & {
-          id?: string;
-          created_at?: string;
-        };
-        Update: Partial<Omit<DocumentChunkRow, "id">>;
-      };
     };
     Functions: {
-      match_chunks: {
+      match_documents: {
         Args: {
           query_embedding: number[];
           match_count?: number;
           match_threshold?: number;
         };
-        Returns: MatchChunkResult[];
+        Returns: MatchDocumentResult[];
       };
     };
-    Enums: Record<string, never>;
   };
 }

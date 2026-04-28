@@ -1,9 +1,5 @@
-/**
- * DELETE /api/documents/[id]
- * Removes the document and all its chunks (FK cascade).
- */
 import { NextRequest, NextResponse } from "next/server";
-import { deleteDocument, getDocument } from "@/lib/supabase";
+import { getDocumentByChunkId, deleteDocumentByFilename } from "@/lib/supabase";
 
 export const runtime = "nodejs";
 
@@ -18,13 +14,15 @@ export async function DELETE(
       return NextResponse.json({ error: "Document ID is required." }, { status: 400 });
     }
 
-    // Verify document exists before attempting delete
-    const existing = await getDocument(id);
-    if (!existing) {
+    // Resolve filename from this chunk ID
+    const chunk = await getDocumentByChunkId(parseInt(id));
+    if (!chunk) {
       return NextResponse.json({ error: "Document not found." }, { status: 404 });
     }
 
-    await deleteDocument(id);
+    const filename = chunk.metadata.filename;
+    await deleteDocumentByFilename(filename);
+    
     return NextResponse.json({ success: true });
   } catch (err) {
     console.error("[DELETE /api/documents/[id]]", err);

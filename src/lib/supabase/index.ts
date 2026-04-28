@@ -19,19 +19,16 @@ export { supabaseAdmin, getSupabaseAdmin } from "./server";
 // Typed query helpers
 export {
   listDocuments,
-  getDocument,
-  createDocument,
-  deleteDocument,
-  insertChunks,
+  insertDocumentChunks,
   countChunks,
-  matchChunks,
-  resolveDocumentNames,
+  deleteDocumentByFilename,
+  getDocumentByChunkId,
+  matchDocuments,
 } from "./queries";
 
 // TypeScript types
 export type {
   Database,
   DocumentRow,
-  DocumentChunkRow,
-  MatchChunkResult,
+  MatchDocumentResult,
 } from "./types";

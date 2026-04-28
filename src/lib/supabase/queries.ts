@@ -9,133 +9,118 @@
  * Our manual types in ./types.ts remain the authoritative shape documentation.
  */
 import { supabaseAdmin } from "./server";
-import type { DocumentRow, MatchChunkResult } from "./types";
+import type { DocumentRow, MatchDocumentResult } from "./types";
 
 // Shorthand to escape the generic for calls that need it
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any;
 
-// ─── Documents ────────────────────────────────────────────────────────────────
-
-/** Fetch all documents ordered newest-first. */
+/** Fetch unique filenames by aggregating chunk metadata. */
 export async function listDocuments(): Promise<DocumentRow[]> {
+  // We use a simple select and then filter in JS for maximum compatibility with Supabase's simple API.
+  // In a real production app, you might use a Postgres VIEW or a more complex RPC.
   const { data, error } = await db
     .from("documents")
-    .select("*")
+    .select("id, content, metadata, created_at")
     .order("created_at", { ascending: false });
 
   if (error) throw new Error(`listDocuments: ${error.message}`);
-  return (data as DocumentRow[]) ?? [];
+
+  const rows = (data as DocumentRow[]) ?? [];
+  
+  // Aggregate by filename
+  const seenFiles = new Set<string>();
+  const uniqueDocs: DocumentRow[] = [];
+  
+  for (const row of rows) {
+    const filename = row.metadata.filename;
+    if (!seenFiles.has(filename)) {
+      seenFiles.add(filename);
+      uniqueDocs.push(row);
+    }
+  }
+  
+  return uniqueDocs;
 }
 
-/** Fetch a single document by ID. Returns null if not found. */
-export async function getDocument(id: string): Promise<DocumentRow | null> {
+/** Count how many chunks exist for a specific filename. */
+export async function countChunks(filename: string): Promise<number> {
+  const { count, error } = await db
+    .from("documents")
+    .select("id", { count: "exact", head: true })
+    .eq("metadata->>filename", filename);
+
+  if (error) throw new Error(`countChunks: ${error.message}`);
+  return (count as number) ?? 0;
+}
+
+/** Insert a batch of chunks into the documents table. */
+export async function insertDocumentChunks(
+  chunks: Array<{
+    content: string;
+    metadata: {
+      filename: string;
+      chunk_index: number;
+      file_size: number;
+      total_chunks: number;
+      upload_date: string;
+      [key: string]: any;
+    };
+    embedding: number[];
+  }>
+): Promise<number> {
+  const rows = chunks.map((c) => ({
+    content: c.content,
+    metadata: c.metadata,
+    // Supabase pgvector can accept a plain JS array [0.1, 0.2, ...] 
+    // and correctly type-cast it to a vector in the DB.
+    embedding: c.embedding,
+  }));
+
+  const { data, error } = await db.from("documents").insert(rows).select("id");
+  if (error) throw new Error(`insertDocumentChunks: ${error.message}`);
+  
+  return (data as any[])?.length ?? 0;
+}
+
+// ─── Similarity search ────────────────────────────────────────────────────────
+
+/** Delete all chunks belonging to a specific filename. */
+export async function deleteDocumentByFilename(filename: string): Promise<void> {
+  const { error } = await db
+    .from("documents")
+    .delete()
+    .eq("metadata->>filename", filename);
+    
+  if (error) throw new Error(`deleteDocumentByFilename: ${error.message}`);
+}
+
+/** Resolve a filename from a chunk ID. */
+export async function getDocumentByChunkId(id: number): Promise<DocumentRow | null> {
   const { data, error } = await db
     .from("documents")
     .select("*")
     .eq("id", id)
     .single();
 
-  if (error && error.code !== "PGRST116") {
-    throw new Error(`getDocument: ${error.message}`);
-  }
-  return (data as DocumentRow) ?? null;
-}
-
-/** Insert a new document record and return the created row. */
-export async function createDocument(
-  input: Pick<DocumentRow, "name" | "size_bytes" | "num_pages">
-): Promise<DocumentRow> {
-  const { data, error } = await db
-    .from("documents")
-    .insert(input)
-    .select()
-    .single();
-
-  if (error || !data) throw new Error(`createDocument: ${error?.message}`);
+  if (error) return null;
   return data as DocumentRow;
 }
 
-/** Delete a document and all its chunks (FK cascade handles the rest). */
-export async function deleteDocument(id: string): Promise<void> {
-  const { error } = await db.from("documents").delete().eq("id", id);
-  if (error) throw new Error(`deleteDocument: ${error.message}`);
-}
-
-// ─── Chunks ───────────────────────────────────────────────────────────────────
-
-/** Insert a batch of embedding chunks for one document. */
-export async function insertChunks(
-  chunks: Array<{
-    document_id: string;
-    chunk_index: number;
-    content: string;
-    embedding: number[];
-  }>
-): Promise<void> {
-  const rows = chunks.map((c) => ({
-    document_id: c.document_id,
-    chunk_index: c.chunk_index,
-    content: c.content,
-    // Supabase pgvector expects a JSON-serialised array
-    embedding: JSON.stringify(c.embedding),
-  }));
-
-  const { error } = await db.from("document_chunks").insert(rows);
-  if (error) throw new Error(`insertChunks: ${error.message}`);
-}
-
-/** Count how many chunks belong to a document. */
-export async function countChunks(documentId: string): Promise<number> {
-  const { count, error } = await db
-    .from("document_chunks")
-    .select("id", { count: "exact", head: true })
-    .eq("document_id", documentId);
-
-  if (error) throw new Error(`countChunks: ${error.message}`);
-  return (count as number) ?? 0;
-}
-
-// ─── Similarity search ────────────────────────────────────────────────────────
-
 /**
- * Run pgvector cosine similarity search via the match_chunks RPC.
+ * Run pgvector cosine similarity search via the match_documents RPC.
  * Returns the top-k chunks most relevant to the query embedding.
  */
-export async function matchChunks(
+export async function matchDocuments(
   queryEmbedding: number[],
   options?: { matchCount?: number; matchThreshold?: number }
-): Promise<MatchChunkResult[]> {
-  const { data, error } = await db.rpc("match_chunks", {
+): Promise<MatchDocumentResult[]> {
+  const { data, error } = await db.rpc("match_documents", {
     query_embedding: queryEmbedding,
-    match_count: options?.matchCount ?? 5,
     match_threshold: options?.matchThreshold ?? 0.4,
+    match_count: options?.matchCount ?? 5,
   });
 
-  if (error) throw new Error(`matchChunks: ${error.message}`);
-  return (data as MatchChunkResult[]) ?? [];
-}
-
-/**
- * Resolve document IDs → human-readable names.
- * Used to build source citation lists after a similarity search.
- */
-export async function resolveDocumentNames(
-  documentIds: string[]
-): Promise<Record<string, string>> {
-  if (documentIds.length === 0) return {};
-
-  const { data, error } = await db
-    .from("documents")
-    .select("id, name")
-    .in("id", documentIds);
-
-  if (error) throw new Error(`resolveDocumentNames: ${error.message}`);
-
-  return Object.fromEntries(
-    ((data as Array<{ id: string; name: string }>) ?? []).map((d) => [
-      d.id,
-      d.name,
-    ])
-  );
+  if (error) throw new Error(`matchDocuments: ${error.message}`);
+  return (data as MatchDocumentResult[]) ?? [];
 }
