@@ -17,8 +17,6 @@ const db = supabaseAdmin as any;
 
 /** Fetch unique filenames by aggregating chunk metadata. */
 export async function listDocuments(): Promise<DocumentRow[]> {
-  // We use a simple select and then filter in JS for maximum compatibility with Supabase's simple API.
-  // In a real production app, you might use a Postgres VIEW or a more complex RPC.
   const { data, error } = await db
     .from("documents")
     .select("id, content, metadata, created_at")
@@ -27,11 +25,11 @@ export async function listDocuments(): Promise<DocumentRow[]> {
   if (error) throw new Error(`listDocuments: ${error.message}`);
 
   const rows = (data as DocumentRow[]) ?? [];
-  
+
   // Aggregate by filename
   const seenFiles = new Set<string>();
   const uniqueDocs: DocumentRow[] = [];
-  
+
   for (const row of rows) {
     const filename = row.metadata.filename;
     if (!seenFiles.has(filename)) {
@@ -39,7 +37,7 @@ export async function listDocuments(): Promise<DocumentRow[]> {
       uniqueDocs.push(row);
     }
   }
-  
+
   return uniqueDocs;
 }
 
@@ -70,16 +68,18 @@ export async function insertDocumentChunks(
   }>
 ): Promise<number> {
   const rows = chunks.map((c) => ({
+    // title is required (NOT NULL) — use filename as the title
+    title: c.metadata.filename,
     content: c.content,
     metadata: c.metadata,
-    // Supabase pgvector can accept a plain JS array [0.1, 0.2, ...] 
-    // and correctly type-cast it to a vector in the DB.
+    // Supabase pgvector accepts a plain JS array [0.1, 0.2, ...]
+    // and correctly type-casts it to a vector in the DB.
     embedding: c.embedding,
   }));
 
   const { data, error } = await db.from("documents").insert(rows).select("id");
   if (error) throw new Error(`insertDocumentChunks: ${error.message}`);
-  
+
   return (data as any[])?.length ?? 0;
 }
 
@@ -91,7 +91,7 @@ export async function deleteDocumentByFilename(filename: string): Promise<void> 
     .from("documents")
     .delete()
     .eq("metadata->>filename", filename);
-    
+
   if (error) throw new Error(`deleteDocumentByFilename: ${error.message}`);
 }
 
